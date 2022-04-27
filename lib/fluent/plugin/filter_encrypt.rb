@@ -7,17 +7,14 @@ module Fluent
     Fluent::Plugin.register_filter('encrypt', self)
 
     SUPPORTED_ALGORITHMS = {
-      aes_256_cbc: { name: "AES-256-CBC", use_iv: true },
-      aes_192_cbc: { name: "AES-192-CBC", use_iv: true },
-      aes_128_cbc: { name: "AES-128-CBC", use_iv: true },
-      aes_256_ecb: { name: "AES-256-ECB", use_iv: false },
-      aes_192_ecb: { name: "AES-192-ECB", use_iv: false },
-      aes_128_ecb: { name: "AES-128-ECB", use_iv: false },
+      aes_256_gcm: { name: "AES-256-CBC", use_iv: false },
     }
 
     config_param :algorithm, :enum, list: SUPPORTED_ALGORITHMS.keys, default: :aes_256_cbc
     config_param :encrypt_key_hex, :string
     config_param :encrypt_iv_hex, :string, default: nil
+
+    config_param :decrypt, :string, default: nil
 
     config_param :key,  :string, default: nil
     config_param :keys, :array, default: []
@@ -47,7 +44,14 @@ module Fluent
         enc = OpenSSL::Cipher.new(algorithm[:name])
         enc.encrypt
         enc.key = @enc_key
-        enc.iv  = @enc_iv if @enc_iv
+        enc.iv  = @enc_iv
+        enc
+      }
+      @dec_generator = ->(){
+        enc = OpenSSL::Cipher.new(algorithm[:name])
+        enc.decrypt
+        enc.key = @enc_key
+        enc.iv  = @enc_iv
         enc
       }
     end
@@ -58,7 +62,11 @@ module Fluent
         r = record.dup
         record.each_pair do |key, value|
           if @target_keys.include?(key)
-            r[key] = encrypt(value)
+            if @decrypt
+              r[key] = decrypt(value)
+            else
+              r[key] = encrypt(value)
+            end
           end
         end
         new_es.add(time, r)
@@ -72,6 +80,14 @@ module Fluent
       encrypted << enc.update(value)
       encrypted << enc.final
       Base64.encode64(encrypted)
+    end
+
+    def decrypt(value)
+      decrypted = ""
+      dec = @dec_generator.call()
+      decrypted << dec.update(Base64.decode64(value))
+      decrypted << dec.final
+      decrypted
     end
   end
 end
